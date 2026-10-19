@@ -1,0 +1,6 @@
+<resources>
+    <!-- Keep the app's dark palette intact under manufacturer forced-dark modes. -->
+    <style name="AppTheme" parent="BaseAppTheme">
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+</resources>
