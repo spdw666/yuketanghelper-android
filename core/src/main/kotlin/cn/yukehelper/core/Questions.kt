@@ -6,7 +6,9 @@ data class Question(
     val id: String, val slideId: String, val presentation: String, val type: Int,
     val options: List<String>, val maxChoices: Int, val cover: String,
     val limitSeconds: Double = 0.0, val sentAt: Long = 0, val answered: Boolean = false,
+    val originalId: JsonPrimitive? = null,
 ) {
+    val requestId: JsonPrimitive get() = originalId ?: identifier(id)
     fun deadline(): Long? = if (limitSeconds > 0 && sentAt > 0) sentAt + (limitSeconds * 1000).toLong() else null
 }
 sealed interface Answer {
@@ -32,11 +34,11 @@ object QuestionProtocol {
             val max = when (type) { 1 -> 1; 3 -> (p.text("pollingCount").toIntOrNull() ?: 1).coerceAtLeast(1); else -> options.size }
             Question(id, slide.text("id"), presentation, type, options, max.coerceAtMost(options.size), slide.text("cover"),
                 p.text("limit").toDoubleOrNull() ?: 0.0, p.text("sendTime").toDoubleOrNull()?.toLong() ?: 0L,
-                p["result"] != null && p["result"] != JsonNull)
+                p["result"] != null && p["result"] != JsonNull, p["problemId"] as? JsonPrimitive)
         }
 
     fun answer(q: Question, answer: Answer, now: Long) = buildJsonObject {
-        put("problemId", identifier(q.id)); put("problemType", q.type); put("dt", now)
+        put("problemId", q.requestId); put("problemType", q.type); put("dt", now)
         put("result", when (answer) {
             is Answer.Choices -> JsonArray(answer.options.map { JsonPrimitive(it) })
             is Answer.Text -> buildJsonObject {

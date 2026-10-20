@@ -44,6 +44,56 @@ class ActionApiTest {
         assertEquals(" ", short["content"]!!.jsonPrimitive.content)
         assertEquals("", short["pics"]!!.jsonArray.single().jsonObject["pic"]!!.jsonPrimitive.content)
     }
+    @Test fun stringProblemIdentifiersKeepTheirOriginalJsonTypeAndExactDigits() = runBlocking {
+        for (id in listOf("1800552410780549125", "00042")) {
+            server.enqueue(MockResponse().setBody("""{"code":0,"data":{"slides":[{"id":"43","problem":{"problemId":"$id","problemType":1,"options":[{"key":"A"}],"result":null}}]}}"""))
+            server.enqueue(MockResponse().setBody("""{"code":0}"""))
+            val question = api.presentation(account, access, "9").single()
+            server.takeRequest()
+            api.submit(account, access, question, Answer.Choices(listOf("A")), 1234)
+            val sent = parse(server.takeRequest().body.readUtf8())["problemId"]!!.jsonPrimitive
+            assertTrue("String problem IDs must stay strings", sent.isString)
+            assertEquals(id, sent.content)
+        }
+    }
+    @Test fun numericProblemIdentifiersKeepAllDigitsWithoutFloatingPointConversion() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"code":0,"data":{"slides":[{"id":43,"problem":{"problemId":1800552410780549125,"problemType":1,"options":[{"key":"A"}]}}]}}"""))
+        server.enqueue(MockResponse().setBody("""{"code":0}"""))
+        val question = api.presentation(account, access, "9").single()
+        server.takeRequest()
+        api.submit(account, access, question, Answer.Choices(listOf("A")), 1234)
+        val sent = parse(server.takeRequest().body.readUtf8())["problemId"]!!.jsonPrimitive
+        assertFalse(sent.isString)
+        assertEquals("1800552410780549125", sent.content)
+    }
+    @Test fun answerRejectionRetainsOnlyNumericCodesAndKnownValidationCategory() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"code":50400,"msg":"cannot unmarshal number into Go struct field problemId of type string; test-secret-session","data":{"token":"test-private-token"}}"""))
+        try { api.submit(account, access, q, Answer.Choices(listOf("A")), 0); fail() }
+        catch (e: ActionFailure) {
+            assertEquals(400, e.httpStatus)
+            assertEquals(50400, e.code)
+            assertEquals(LessonEntryDetail.STRING_TYPE, e.detail)
+            assertFalse(e.toString().contains("test-secret-session"))
+            assertFalse(e.toString().contains("test-private-token"))
+        }
+    }
+    @Test fun httpErrorMissingCodeAndNonJsonErrorsNeverCountAsAcceptedAnswers() = runBlocking {
+        val responses = listOf(
+            MockResponse().setResponseCode(400).setBody("""{"code":0,"data":{"accepted":true}}"""),
+            MockResponse().setBody("""{"success":true,"data":{}}"""),
+            MockResponse().setResponseCode(502).setBody("<html>test-private-error</html>"),
+        )
+        for (response in responses) {
+            server.enqueue(response)
+            try { api.submit(account, access, q, Answer.Choices(listOf("A")), 0); fail() }
+            catch (e: ActionFailure) { assertFalse(e.toString().contains("test-private-error")) }
+        }
+    }
+    @Test fun sessionExpiryInAnHttpErrorIsStillPropagated() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"code":-1,"msg":"登录过期"}"""))
+        try { api.submit(account, access, q, Answer.Choices(listOf("A")), 0); fail() }
+        catch (_: SessionExpired) { }
+    }
     @Test fun danmuAndBonusUseExactEndpointAndFields() = runBlocking {
         repeat(2) { server.enqueue(MockResponse().setBody("""{"code":0,"data":{}}""")) }
         api.danmu(account, access, "你好")
@@ -61,7 +111,7 @@ class ActionApiTest {
     @Test fun unsuccessfulActionsNeverReportSuccess() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"code":5,"msg":"do not expose secret error data"}"""))
         try { api.bonus(account, access, "88"); fail() }
-        catch (e: ApiRejected) { assertFalse(e.message!!.contains("secret")) }
+        catch (e: ActionFailure) { assertEquals(5, e.code); assertFalse(e.message!!.contains("secret")) }
     }
     @Test fun actionsUseTheSameStringLessonIdentifierAsTheAcceptedEntry() = runBlocking {
         val stringAccess = LessonAccess(ActiveLesson(12, "7", "数学", JsonPrimitive("00012")), "test-token", "test-bearer")

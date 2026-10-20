@@ -18,6 +18,7 @@ class BackgroundActivity : Activity() {
     private lateinit var body: LinearLayout
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Notifications(this)
         val root = column()
         val header = row().apply { setPadding(dp(16), dp(12), dp(16), dp(8)) }
         header.addView(action("返回", false) { finish() }, touchParams(dp(76)))
@@ -38,10 +39,11 @@ class BackgroundActivity : Activity() {
         val power = getSystemService(PowerManager::class.java)
         val allowed = manager.areNotificationsEnabled()
         val classroom = manager.getNotificationChannel("classroom")?.importance != NotificationManager.IMPORTANCE_NONE
+        val homework = manager.getNotificationChannel("homework")?.importance != NotificationManager.IMPORTANCE_NONE
         body.block(label("${Build.MANUFACTURER} ${Build.MODEL}\nAndroid ${Build.VERSION.RELEASE}", 19f, bold = true))
         body.block(card().apply {
             addView(label("通知与提醒", 18f, bold = true)); gap(8)
-            addView(label(when { !allowed -> "通知尚未开启，课堂提醒无法显示。"; !classroom -> "课堂事件通知类别已关闭。"; else -> "应用通知已开启；请同时检查声音、锁屏显示与勿扰模式。" }, 14f, Palette.muted)); gap()
+            addView(label(when { !allowed -> "通知尚未开启，课堂与作业提醒无法显示。"; !classroom -> "课堂事件通知类别已关闭。"; !homework -> "作业提醒通知类别已关闭。"; else -> "应用通知已开启；请同时检查声音、锁屏显示与勿扰模式。" }, 14f, Palette.muted)); gap()
             block(action("通知设置", false) {
                 if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                     requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 8)
@@ -50,6 +52,10 @@ class BackgroundActivity : Activity() {
             block(action("课堂事件通知类别", false) {
                 openSystemSettings(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
                     .putExtra(Settings.EXTRA_CHANNEL_ID, "classroom"))
+            }, 8)
+            block(action("作业提醒通知类别", false) {
+                openSystemSettings(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    .putExtra(Settings.EXTRA_CHANNEL_ID, "homework"))
             }, 0)
         })
         body.block(card().apply {

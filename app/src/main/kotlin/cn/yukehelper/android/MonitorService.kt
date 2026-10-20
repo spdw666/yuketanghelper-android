@@ -75,28 +75,36 @@ class MonitorService : Service() {
             graph.store.event(ClassroomEvent(EventKind.SYSTEM, if (account.demo) "演示监测已开始，操作仅模拟" else "账号课堂监测已开始"), key)
             val gateway = if (account.demo) DemoGateway() else graph.api
             val actions: AutomationGateway = if (account.demo) DemoActions else graph.api
-            MonitorEngine(gateway, poll * 1000L,
-                excludedCourses = { graph.store.profile(key)?.excludedCourses.orEmpty() },
-                automationFactory = { sessionScope, user, access, emit ->
-                    LessonAutomation(sessionScope, user, access, actions,
-                        if (account.demo) AiAnswerer { q, _ -> if (q.type == 5) Answer.Text("演示答案") else Answer.Choices(q.options.take(1)) } else graph.ai,
-                        { graph.store.state.value.configuration.effectiveCourseSettings(key, access.lesson.classroomId) },
-                        { graph.store.state.value.configuration.ai }, emit)
-                }).run(account) { update ->
-                if (graph.store.profile(key)?.account !== account) return@run
-                when (update) {
-                    is MonitorUpdate.Poll -> graph.store.runtime(key) { it.copy(lessons = update.lessons, lastPoll = update.at) }
-                    is MonitorUpdate.Connection -> graph.store.runtime(key) { state -> state.copy(connected = state.connected.toMutableSet().apply {
-                        if (update.connected) add(update.lessonId) else remove(update.lessonId)
-                    }) }
-                    is MonitorUpdate.Event -> {
-                        graph.store.event(update.event, key)
-                        val runtime = graph.store.state.value.runtimes[key]
-                        val course = runtime?.lessons?.firstOrNull { it.id == update.event.lessonId }?.classroomId
-                        val config = graph.store.state.value.configuration
-                        val settings = course?.let { config.effectiveCourseSettings(key, it) } ?: config.courseSettings
-                        if (settings.enabled && settings.notification.accepts(update.event.kind)) notifications.event(update.event, account)
-                        if (settings.enabled && settings.voice.accepts(update.event.kind)) voice.speak("${account.name}，${update.event.course}，${update.event.summary}")
+            coroutineScope {
+                launch {
+                    while (isActive) {
+                        graph.homework.sync(account)
+                        delay(HomeworkSynchronizer.INTERVAL)
+                    }
+                }
+                MonitorEngine(gateway, poll * 1000L,
+                    excludedCourses = { graph.store.profile(key)?.excludedCourses.orEmpty() },
+                    automationFactory = { sessionScope, user, access, emit ->
+                        LessonAutomation(sessionScope, user, access, actions,
+                            if (account.demo) AiAnswerer { q, _ -> if (q.type == 5) Answer.Text("演示答案") else Answer.Choices(q.options.take(1)) } else graph.ai,
+                            { graph.store.state.value.configuration.effectiveCourseSettings(key, access.lesson.classroomId) },
+                            { graph.store.state.value.configuration.ai }, emit)
+                    }).run(account) { update ->
+                    if (graph.store.profile(key)?.account !== account) return@run
+                    when (update) {
+                        is MonitorUpdate.Poll -> graph.store.runtime(key) { it.copy(lessons = update.lessons, lastPoll = update.at) }
+                        is MonitorUpdate.Connection -> graph.store.runtime(key) { state -> state.copy(connected = state.connected.toMutableSet().apply {
+                            if (update.connected) add(update.lessonId) else remove(update.lessonId)
+                        }) }
+                        is MonitorUpdate.Event -> {
+                            graph.store.event(update.event, key)
+                            val runtime = graph.store.state.value.runtimes[key]
+                            val course = runtime?.lessons?.firstOrNull { it.id == update.event.lessonId }?.classroomId
+                            val config = graph.store.state.value.configuration
+                            val settings = course?.let { config.effectiveCourseSettings(key, it) } ?: config.courseSettings
+                            if (settings.enabled && settings.notification.accepts(update.event.kind)) notifications.event(update.event, account)
+                            if (settings.enabled && settings.voice.accepts(update.event.kind)) voice.speak("${account.name}，${update.event.course}，${update.event.summary}")
+                        }
                     }
                 }
             }

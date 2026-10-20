@@ -215,6 +215,9 @@ class LessonAutomation(
         if (result == null) result = fallback(q)
         delay((hold - (now() - started)).coerceAtLeast(0))
         if (!enabled() || settings().mode(q.type) != mode) return false
+        var useStringId = false
+        var lastFailure = "未收到服务端成功确认"
+        var lastIdIsString = q.requestId.isString
         // Always refresh before POST, including retries, to protect manual answers.
         while ((attempts[q.id] ?: 0) < 3 && currentCoroutineContext().isActive) {
             if (!enabled() || settings().mode(q.type) != mode) return false
@@ -229,20 +232,42 @@ class LessonAutomation(
                 return true
             }
             if (fresh.deadline()?.let { it <= serverNow() } == true) return true
+            val submitted = if (useStringId) fresh.copy(originalId = JsonPrimitive(fresh.id)) else fresh
+            lastIdIsString = submitted.requestId.isString
             attempts.merge(q.id, 1, Int::plus)
             try {
                 val timeLeft = deadline?.minus(serverNow()) ?: 3000L
-                withTimeout(timeLeft.coerceIn(1, 3000)) { gateway.submit(account, access, fresh, result, now()) }
+                withTimeout(timeLeft.coerceIn(1, 3000)) { gateway.submit(account, access, submitted, result, now()) }
                 val display = when (result) { is Answer.Choices -> result.options.joinToString(" "); is Answer.Text -> result.content.trim().ifBlank { "（空白）" } }
                 event(EventKind.ANSWER, "题目 ${q.id} 已提交（$source）：${display.take(200)}")
                 return true
-            } catch (_: TimeoutCancellationException) { currentCoroutineContext().ensureActive() }
+            } catch (_: TimeoutCancellationException) {
+                currentCoroutineContext().ensureActive()
+                lastFailure = "提交请求超时"
+            }
             catch (e: CancellationException) { throw e }
             catch (e: SessionExpired) { throw e }
-            catch (_: Exception) { /* A fresh server result is required before every retry. */ }
+            catch (e: ActionFailure) {
+                lastFailure = e.message.orEmpty()
+                // As with lesson entry, change only representation for the reported
+                // parameter rejection, within the same three-POST budget.
+                if (!lastIdIsString && e.httpStatus == 400 && e.code == 50400 &&
+                    e.detail in listOf(null, LessonEntryDetail.STRING_TYPE, LessonEntryDetail.PARAMETERS)) useStringId = true
+            }
+            catch (e: NetworkFailure) {
+                lastFailure = (e.issue?.summary ?: "网络请求失败") + e.status?.let { "，HTTP $it" }.orEmpty()
+            }
+            catch (e: ApiRejected) { lastFailure = "服务端未接受提交" + e.code?.let { "，接口代码 $it" }.orEmpty() }
+            catch (_: Exception) { lastFailure = "提交响应异常" }
             if ((attempts[q.id] ?: 0) < 3) delay(350)
         }
-        event(EventKind.ANSWER, "题目 ${q.id} 提交未确认，已达到 3 次尝试上限")
+        // The last POST can be accepted even if its response is lost. Read it
+        // back as well; never add a fourth POST or overwrite an existing answer.
+        if (load(q.presentation) && (questions[q.id]?.answered == true || q.id in handled)) {
+            event(EventKind.ANSWER, "题目 ${q.id} 已确认存在答案，停止重试并保留现有提交")
+            return true
+        }
+        event(EventKind.ANSWER, "题目 ${q.id} 提交未确认，已达到 3 次尝试上限；$lastFailure，编号格式：${if (lastIdIsString) "字符串" else "数字"}。请在官方雨课堂核对")
         return false
     }
 }

@@ -85,10 +85,10 @@ class GlobalAiSettingsTest {
         assertTrue(cleared.aiMigration.isEmpty())
     }
 
-    @Test fun versionFourOnlyStoresOneAiSectionAndNeverResurrectsAccountKeys() {
+    @Test fun currentVersionOnlyStoresOneAiSectionAndNeverResurrectsAccountKeys() {
         val migrated = migrate(account("1", key("原密钥", "test-old")))
         val encoded = Json.parseToJsonElement(ConfigurationCodec.encode(migrated)).jsonObject
-        assertEquals(4, encoded["version"]!!.jsonPrimitive.int)
+        assertEquals(5, encoded["version"]!!.jsonPrimitive.int)
         assertFalse("ai" in encoded["accounts"]!!.jsonArray.single().jsonObject)
         val current = Json.parseToJsonElement("""{"active":0,"fallback":false,"keys":[${key("全局", "test-global")}]}""")
         val staleAccount = Json.parseToJsonElement(account("1", key("旧账号", "test-stale")))

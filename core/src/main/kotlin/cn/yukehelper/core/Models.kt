@@ -44,7 +44,7 @@ class LessonAccess(val lesson: ActiveLesson, val lessonToken: String, val bearer
 
 enum class EventKind(val label: String) {
     SYSTEM("状态"), SIGN_IN("签到"), QUESTION("题目"), CALL("点名"),
-    DANMU("弹幕"), BONUS("红包"), LESSON_END("下课"), ERROR("连接"), ANSWER("答题"), ACTION("操作"),
+    DANMU("弹幕"), BONUS("红包"), LESSON_END("下课"), ERROR("连接"), ANSWER("答题"), ACTION("操作"), HOMEWORK("作业"),
 }
 
 data class ClassroomEvent(
@@ -53,6 +53,7 @@ data class ClassroomEvent(
     val course: String = "",
     val lessonId: Long? = null,
     val at: Long = System.currentTimeMillis(),
+    val homeworkKey: String? = null,
 )
 
 sealed interface LessonFrame {
@@ -77,6 +78,16 @@ interface ClassroomGateway {
 class SessionExpired : Exception("登录已失效，请重新登录")
 class ApiRejected(val code: Int?, message: String) : Exception(message)
 class NetworkFailure(message: String, val issue: ConnectionIssue? = null, val status: Int? = null) : Exception(message)
+
+/** Only numeric status and a fixed validation category are retained from an action error. */
+class ActionFailure(
+    val httpStatus: Int,
+    val code: Int? = null,
+    val detail: LessonEntryDetail? = null,
+) : Exception(
+    "操作请求未被接受，HTTP $httpStatus" + code?.let { "，接口代码 $it" }.orEmpty() +
+        detail?.let { "，${it.summary}" }.orEmpty(),
+)
 
 enum class LessonEntryIssue(val summary: String, val advice: String) {
     REJECTED("入课请求被拒绝，具体原因待确认", "请在本 App 重新登录后重试；若仍失败，请反馈此错误码"),

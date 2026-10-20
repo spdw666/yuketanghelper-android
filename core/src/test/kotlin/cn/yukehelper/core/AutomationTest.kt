@@ -19,6 +19,11 @@ class AutomationTest {
         var failPosts = 0
         var readsFail = false
         var uncertainAccepted = false
+        var uncertainAcceptedOnPost: Int? = null
+        var requireStringId = false
+        var postFailure: Exception? = null
+        var failReadbackAfterThird = false
+        val submittedIds = mutableListOf<JsonPrimitive>()
         var answer: Answer? = null
         var danmus = 0
         var bonuses = 0
@@ -28,7 +33,11 @@ class AutomationTest {
         }
         override suspend fun submit(account: Account, access: LessonAccess, question: Question, answer: Answer, now: Long) {
             posts++
-            if (uncertainAccepted) { this.question = question.copy(answered = true); throw NetworkFailure("lost response") }
+            submittedIds.add(QuestionProtocol.answer(question, answer, now)["problemId"]!!.jsonPrimitive)
+            if (failReadbackAfterThird && posts == 3) readsFail = true
+            if (requireStringId && !submittedIds.last().isString) throw ActionFailure(400, 50400, LessonEntryDetail.STRING_TYPE)
+            postFailure?.let { throw it }
+            if (uncertainAccepted || posts == uncertainAcceptedOnPost) { this.question = question.copy(answered = true); throw NetworkFailure("lost response") }
             if (posts <= failPosts) throw NetworkFailure("failed")
             this.answer = answer
             this.question = question.copy(answered = true)
@@ -159,6 +168,65 @@ class AutomationTest {
         val f = Fixture(this); f.gateway.failPosts = 100
         f.engine.accept(unlock); runCurrent(); advanceTimeBy(1000); runCurrent()
         repeat(5) { f.engine.accept(unlock) }; runCurrent()
+        assertEquals(3, f.gateway.posts)
+    }
+    @Test fun acceptedThirdSubmissionIsReadBackBeforeReportingFailure() = runTest {
+        val f = Fixture(this)
+        f.gateway.failPosts = 2
+        f.gateway.uncertainAcceptedOnPost = 3
+        f.engine.accept(unlock); runCurrent(); advanceTimeBy(1000); runCurrent()
+        assertEquals(3, f.gateway.posts)
+        assertTrue(f.gateway.question.answered)
+        assertTrue(f.events.any { "已有答案" in it.summary || "已确认" in it.summary })
+        assertTrue(f.events.none { "达到 3 次" in it.summary })
+        repeat(3) { f.engine.accept(unlock) }; runCurrent()
+        assertEquals(3, f.gateway.posts)
+    }
+    @Test fun reportedStringParameterRejectionUsesTheSameIdWithinTheExistingAttemptLimit() = runTest {
+        val id = "1800552410780549125"
+        val f = Fixture(this, question().copy(id = id))
+        f.gateway.requireStringId = true
+        f.engine.accept(root("""{"op":"unlockproblem","problem":{"prob":"$id","pres":9}}"""))
+        runCurrent(); advanceTimeBy(1000); runCurrent()
+        assertEquals(2, f.gateway.posts)
+        assertEquals(listOf(false, true), f.gateway.submittedIds.map { it.isString })
+        assertTrue(f.gateway.submittedIds.all { it.content == id })
+        assertTrue(f.events.any { "已提交" in it.summary })
+    }
+    @Test fun otherRejectionsNeverChangeTheIdentifierOrExposeExceptionText() = runTest {
+        val errors = listOf(
+            ActionFailure(400, 50000),
+            ActionFailure(400, 50400, LessonEntryDetail.CSRF),
+            ActionFailure(400, 50400, LessonEntryDetail.NUMBER_TYPE),
+            ActionFailure(400, 50400, LessonEntryDetail.REQUIRED),
+            ActionFailure(400, 50400, LessonEntryDetail.JSON),
+            NetworkFailure("test-secret-session", ConnectionIssue.TIMEOUT),
+        )
+        for (error in errors) {
+            val f = Fixture(this); f.gateway.postFailure = error
+            f.engine.accept(unlock); runCurrent(); advanceTimeBy(1000); runCurrent()
+            assertEquals(3, f.gateway.posts)
+            assertTrue(f.gateway.submittedIds.none { it.isString })
+            val final = f.events.last().summary
+            assertTrue(final.contains("提交未确认"))
+            assertFalse(final.contains("test-secret-session"))
+            if (error is ActionFailure) {
+                assertTrue(final.contains("HTTP ${error.httpStatus}"))
+                assertTrue(final.contains("接口代码 ${error.code}"))
+            }
+        }
+    }
+    @Test fun failedFinalReadbackKeepsStatusUnconfirmedAndNeverAddsAFourthSubmission() = runTest {
+        val f = Fixture(this)
+        f.gateway.failPosts = 2
+        f.gateway.uncertainAcceptedOnPost = 3
+        f.gateway.failReadbackAfterThird = true
+        f.engine.accept(unlock); runCurrent(); advanceTimeBy(1000); runCurrent()
+        assertEquals(3, f.gateway.posts)
+        assertTrue(f.events.any { "提交未确认" in it.summary })
+        assertTrue(f.events.none { "已确认" in it.summary })
+        f.gateway.readsFail = false
+        repeat(4) { f.engine.accept(unlock) }; runCurrent()
         assertEquals(3, f.gateway.posts)
     }
     @Test fun autoDanmuAndBonusAreDeduplicated() = runTest {

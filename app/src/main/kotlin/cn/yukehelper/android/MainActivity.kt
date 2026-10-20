@@ -30,6 +30,8 @@ class MainActivity : Activity() {
     private lateinit var header: LinearLayout
     private lateinit var courseIndex: CourseIndexView
     private var page = 0
+    private var messageTab = 0
+    private var homeworkLimit = 30
     private var domain = Domain.all.first().host
     private var startAfterPermission = false
     private var voiceTester: VoiceNotifier? = null
@@ -38,6 +40,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         page = savedInstanceState?.getInt("page") ?: 0
+        messageTab = savedInstanceState?.getInt("messageTab") ?: 0
+        homeworkLimit = savedInstanceState?.getInt("homeworkLimit") ?: 30
+        showHomeworkIntent(intent)
         val root = column().apply { setBackgroundColor(Palette.background) }
         header = row().apply { setPadding(dp(22), dp(18), dp(22), dp(14)) }
         val titles = column().apply {
@@ -78,7 +83,18 @@ class MainActivity : Activity() {
         if (::body.isInitialized) render(graph.store.state.value)
     }
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putInt("page", page); outState.putBundle("courseIndex", courseIndex.saveState()); super.onSaveInstanceState(outState)
+        outState.putInt("page", page); outState.putInt("messageTab", messageTab); outState.putInt("homeworkLimit", homeworkLimit)
+        outState.putBundle("courseIndex", courseIndex.saveState()); super.onSaveInstanceState(outState)
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent); setIntent(intent); showHomeworkIntent(intent)
+        if (::body.isInitialized) render(graph.store.state.value)
+    }
+    private fun showHomeworkIntent(intent: Intent) {
+        if (!intent.getBooleanExtra("showHomework", false)) return
+        intent.getStringExtra("accountKey")?.let { graph.store.select(it) }
+        page = 2; messageTab = 0
+        intent.removeExtra("showHomework")
     }
     override fun onDestroy() { scope.cancel(); voiceTester?.close(); super.onDestroy() }
 
@@ -169,10 +185,67 @@ class MainActivity : Activity() {
     }
 
     private fun events(state: AppState) {
-        body.block(label("课堂消息", 27f, bold = true), 6)
+        body.block(label("消息", 27f, bold = true), 6)
+        body.block(row().apply {
+            listOf("作业提醒（${state.selectedHomework.size}）", "课堂动态").forEachIndexed { index, title ->
+                addView(action(title, primary = messageTab == index) {
+                    messageTab = index; render(graph.store.state.value)
+                }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6) })
+            }
+        }, 12)
+        if (messageTab == 0) { homework(state); return }
         body.block(label("最近 100 条动态 · 保存在本机", 13f, Palette.muted), 20)
         if (state.events.isEmpty()) body.block(emptyCard("还没有消息", "开启监测后，可在这里查看签到与课堂动态。"))
         else state.events.forEach { body.block(eventCard(it), 10) }
+    }
+
+    private fun homework(state: AppState) {
+        val account = state.account ?: return
+        val status = state.homeworkStatus
+        body.block(label("监测期间定期检查已勾选课程的作业，每轮间隔 5 分钟；停止监测后可手动同步。首次同步提醒尚未截止的作业，后续提醒新作业、要求及截止时间变更。", 13f, Palette.muted), 12)
+        body.block(action(if (status.loading) "正在同步作业…" else "立即同步作业", false) {
+            scope.launch { withContext(Dispatchers.IO) { graph.homework.sync(account) } }
+        }.apply { isEnabled = !status.loading && (account.demo || account.sessionId.isNotBlank()) }, 10)
+        body.block(label(status.message + if (status.lastSuccess > 0) "\n最近完整同步：${SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(status.lastSuccess))}" else "", 12f, Palette.muted), 12)
+        body.block(label("系统通知可在“通用课程设置 → 本机通知 → 作业”控制。图片、附件及完整题目请到官方雨课堂查看，截止时间以官方端为准。", 12f, Palette.muted), 16)
+        val now = System.currentTimeMillis()
+        val items = state.selectedHomework.sortedWith(compareBy<Homework> { it.expired(now) }
+            .thenBy { if (it.expired(now)) -(it.deadline ?: 0L) else it.deadline ?: Long.MAX_VALUE }.thenBy { it.title })
+        if (items.isEmpty()) {
+            body.block(emptyCard("暂无已同步作业", "请勾选需要的课程，再点“立即同步作业”。同步失败或未同步时，不能据此判断没有作业。"))
+            return
+        }
+        items.take(homeworkLimit).forEach { item -> body.block(card().apply {
+            addView(label(if (item.expired(now)) "已截止 · ${item.course}" else item.course, 12f, Palette.muted)); gap(8)
+            addView(label(item.title, 19f, bold = true)); gap(8)
+            addView(label("截止：${item.deadlineLabel()}", 14f, if (item.expired(now)) Palette.muted else Palette.warning)); gap(8)
+            addView(label("作业要求：${item.requirementsLabel()}", 14f).apply {
+                maxLines = 4; ellipsize = android.text.TextUtils.TruncateAt.END
+            }); gap()
+            block(action("查看作业要求", false) { homeworkDialog(item, account) }, 8)
+            block(action("去雨课堂查看", false) { openHomework(item, account) }, 0)
+        }, 10) }
+        if (items.size > homeworkLimit) body.block(action("显示更多作业（还有 ${items.size - homeworkLimit} 份）", false) {
+            homeworkLimit += 30; render(graph.store.state.value)
+        })
+    }
+
+    private fun homeworkDialog(item: Homework, account: Account) {
+        val content = column().apply {
+            setPadding(dp(20), dp(12), dp(20), dp(20))
+            addView(label("${item.course}\n截止：${item.deadlineLabel()}\n\n作业要求\n${item.requirementsLabel()}", 15f).apply { setTextIsSelectable(true) })
+            gap(); addView(label("内容为最近同步的缓存。图片、附件及完整题目请到官方雨课堂查看。", 12f, Palette.muted))
+        }
+        AlertDialog.Builder(this).setTitle(item.title).setView(ScrollView(this).apply { addView(content) })
+            .setNegativeButton("关闭", null).setPositiveButton("去雨课堂") { _, _ -> openHomework(item, account) }.show()
+    }
+    private fun openHomework(item: Homework, account: Account) {
+        if (account.demo) { Toast.makeText(this, "这是演示作业，不会访问真实课堂", Toast.LENGTH_SHORT).show(); return }
+        val route = if (item.type == HomeworkType.QUIZ) "studentQuiz_web/${Uri.encode(item.courseId)}/${Uri.encode(item.id)}"
+            else "cloud/student/exercise/${Uri.encode(item.courseId)}/${Uri.encode(item.leafId)}/${Uri.encode(item.skuId)}"
+        val url = "https://${Domain.requireHost(account.domain).host}/v2/web/$route"
+        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+        catch (_: android.content.ActivityNotFoundException) { Toast.makeText(this, "未找到可打开雨课堂的浏览器", Toast.LENGTH_LONG).show() }
     }
 
     private fun settings(state: AppState) {
@@ -218,7 +291,7 @@ class MainActivity : Activity() {
                     page = 0
                 }.show()
         })
-        body.block(label("雨课助手 0.2.9\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
+        body.block(label("雨课助手 0.2.12\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
     }
 
     private fun eventCard(event: ClassroomEvent) = card().apply {
@@ -227,6 +300,11 @@ class MainActivity : Activity() {
         heading.addView(label(time.format(Date(event.at)), 11f, Palette.muted)); addView(heading); gap(8)
         addView(label(event.summary, 15f))
         if (event.course.isNotBlank()) { gap(6); addView(label(event.course, 12f, Palette.muted)) }
+        if (event.homeworkKey != null) {
+            val item = graph.store.state.value.homework.firstOrNull { it.key == event.homeworkKey }
+            val account = graph.store.state.value.account
+            if (item != null && account != null) { gap(); block(action("查看作业", false) { homeworkDialog(item, account) }, 0) }
+        }
     }
     private fun emptyCard(title: String, subtitle: String) = card().apply {
         addView(label(title, 16f, bold = true)); gap(8); addView(label(subtitle, 13f, Palette.muted))

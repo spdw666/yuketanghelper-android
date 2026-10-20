@@ -27,7 +27,7 @@ class GlobalCourseSettingsTest {
     @Test fun serializedAccountsContainOnlySelectionsAndCannotOverrideCommonRules() {
         val config = Configuration(listOf(AccountProfile(a, excludedCourses = setOf("8"))), a.key, rules)
         val json = Json.parseToJsonElement(ConfigurationCodec.encode(config)).jsonObject
-        assertEquals(4, json["version"]!!.jsonPrimitive.int)
+        assertEquals(5, json["version"]!!.jsonPrimitive.int)
         assertFalse("enabled" in json["courseSettings"]!!.jsonObject)
         val account = json["accounts"]!!.jsonArray.single().jsonObject
         assertFalse("settings" in account)

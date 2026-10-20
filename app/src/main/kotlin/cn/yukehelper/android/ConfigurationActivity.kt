@@ -18,7 +18,7 @@ class ConfigurationActivity : Activity() {
     private lateinit var body: LinearLayout
     private lateinit var mode: String
     private var nextInputId = 1000
-    private val kinds = listOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS)
+    private val kinds = listOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS, EventKind.HOMEWORK)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mode = intent.getStringExtra("mode").orEmpty()
@@ -59,11 +59,11 @@ class ConfigurationActivity : Activity() {
             parent.block(this, 12)
         }
     }
-    private fun subscription(title: String, value: Subscription): () -> Subscription {
+    private fun subscription(title: String, value: Subscription, includeHomework: Boolean = true): () -> Subscription {
         val card = card()
         card.block(label(title, 18f, bold = true), 8)
         val enabled = check("启用$title", value.enabled, card)
-        val checks = kinds.associateWith { check(it.label, it in value.kinds, card) }
+        val checks = kinds.filter { includeHomework || it != EventKind.HOMEWORK }.associateWith { check(it.label, it in value.kinds, card) }
         body.block(card)
         return { Subscription(enabled.isChecked, checks.filterValues { it.isChecked }.keys) }
     }
@@ -97,7 +97,7 @@ class ConfigurationActivity : Activity() {
         val bonus = check("自动领取课堂红包", s.autoBonus)
         body.gap()
         val notification = subscription("本机通知", s.notification)
-        val voice = subscription("中文语音提醒", s.voice)
+        val voice = subscription("中文语音提醒", s.voice, includeHomework = false)
         body.block(action("保存通用课程设置") {
             val count = threshold.text.toString().toIntOrNull()
             if (count == null || count !in 1..100) { threshold.error = "请输入 1–100"; return@action }
@@ -145,7 +145,6 @@ class ConfigurationActivity : Activity() {
             }, 0)
         }) }
         body.block(action("添加 AI 密钥") { editKey(null) })
-        body.block(action("添加 DeepSeek 密钥", false) { editKey(null, AiProvider.DEEPSEEK) })
     }
     private fun editKey(index: Int?, initialProvider: AiProvider = AiProvider.QWEN) {
         val old = index?.let { store.state.value.configuration.ai.keys.getOrNull(it) }

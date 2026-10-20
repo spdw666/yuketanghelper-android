@@ -18,10 +18,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 data class AccountRuntime(val lessons: List<ActiveLesson> = emptyList(), val connected: Set<Long> = emptySet(), val lastPoll: Long = 0)
+data class HomeworkSyncStatus(val loading: Boolean = false, val lastSuccess: Long = 0, val message: String = "尚未同步作业")
 data class AppState(
     val configuration: Configuration = Configuration(), val runtimes: Map<String, AccountRuntime> = emptyMap(),
     val events: List<ClassroomEvent> = emptyList(), val monitoring: Boolean = false,
     val message: String = "", val loading: Boolean = false,
+    val homework: List<Homework> = emptyList(), val homeworkSync: Map<String, HomeworkSyncStatus> = emptyMap(),
 ) {
     val profile get() = configuration.active()
     val account get() = profile?.account
@@ -30,6 +32,8 @@ data class AppState(
     val lessons get() = runtime.lessons
     val connected get() = runtime.connected
     val lastPoll get() = runtime.lastPoll
+    val selectedHomework get() = homework.filter { item -> item.listed && profile?.let { p -> p.selects(item.courseId) && p.courses.any { it.id == item.courseId } } == true }
+    val homeworkStatus get() = homeworkSync[account?.key] ?: HomeworkSyncStatus()
 }
 
 /** Retain the v0.1 key and ciphertext slot for update-install migration. */
@@ -66,37 +70,76 @@ private class CredentialStore(context: Context) {
     }
 }
 
-private class EventDatabase(context: Context) : SQLiteOpenHelper(context, "events.db", null, 2) {
+private class EventDatabase(context: Context) : SQLiteOpenHelper(context, "events.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, summary TEXT NOT NULL, course TEXT NOT NULL, lesson INTEGER, at INTEGER NOT NULL, account TEXT NOT NULL DEFAULT '')")
+        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, summary TEXT NOT NULL, course TEXT NOT NULL, lesson INTEGER, at INTEGER NOT NULL, account TEXT NOT NULL DEFAULT '', homework_key TEXT)")
         db.execSQL("CREATE INDEX events_account ON events(account,id)")
+        createHomework(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE events ADD COLUMN account TEXT NOT NULL DEFAULT ''")
             db.execSQL("CREATE INDEX events_account ON events(account,id)")
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE events ADD COLUMN homework_key TEXT")
+            createHomework(db)
+        }
+    }
+    private fun createHomework(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE homework(account TEXT NOT NULL, item_key TEXT NOT NULL, content TEXT NOT NULL, PRIMARY KEY(account,item_key))")
+    }
+    private fun insertEvent(key: String, event: ClassroomEvent) {
+        writableDatabase.insertOrThrow("events", null, ContentValues().apply {
+            put("account", key); put("kind", event.kind.name); put("summary", event.summary.take(500)); put("course", event.course.take(200))
+            event.lessonId?.let { put("lesson", it) }; put("at", event.at); put("homework_key", event.homeworkKey)
+        })
+    }
+    private fun trimEvents(key: String) {
+        writableDatabase.execSQL("DELETE FROM events WHERE account = ? AND id NOT IN (SELECT id FROM events WHERE account = ? ORDER BY id DESC LIMIT 200)", arrayOf(key, key))
     }
     @Synchronized fun assignLegacy(key: String) { writableDatabase.update("events", ContentValues().apply { put("account", key) }, "account = ''", null) }
     @Synchronized fun add(key: String, event: ClassroomEvent): List<ClassroomEvent> {
         writableDatabase.beginTransaction()
         try {
-            writableDatabase.insertOrThrow("events", null, ContentValues().apply {
-                put("account", key); put("kind", event.kind.name); put("summary", event.summary.take(500)); put("course", event.course.take(200))
-                event.lessonId?.let { put("lesson", it) }; put("at", event.at)
-            })
-            writableDatabase.execSQL("DELETE FROM events WHERE account = ? AND id NOT IN (SELECT id FROM events WHERE account = ? ORDER BY id DESC LIMIT 200)", arrayOf(key, key))
+            insertEvent(key, event)
+            trimEvents(key)
             writableDatabase.setTransactionSuccessful()
         } finally { writableDatabase.endTransaction() }
         return recent(key)
     }
     @Synchronized fun recent(key: String): List<ClassroomEvent> = buildList {
-        readableDatabase.rawQuery("SELECT kind,summary,course,lesson,at FROM events WHERE account = ? ORDER BY id DESC LIMIT 100", arrayOf(key)).use { c ->
+        readableDatabase.rawQuery("SELECT kind,summary,course,lesson,at,homework_key FROM events WHERE account = ? ORDER BY id DESC LIMIT 100", arrayOf(key)).use { c ->
             while (c.moveToNext()) add(ClassroomEvent(runCatching { EventKind.valueOf(c.getString(0)) }.getOrDefault(EventKind.SYSTEM),
-                c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getLong(3), c.getLong(4)))
+                c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getLong(3), c.getLong(4), if (c.isNull(5)) null else c.getString(5)))
         }
     }
-    @Synchronized fun clear(key: String) { writableDatabase.delete("events", "account = ?", arrayOf(key)) }
+    @Synchronized fun homework(key: String): List<Homework> = buildList {
+        readableDatabase.rawQuery("SELECT content FROM homework WHERE account = ?", arrayOf(key)).use { c ->
+            while (c.moveToNext()) add(HomeworkCodec.decode(c.getString(0)))
+        }
+    }
+    @Synchronized fun saveHomework(key: String, items: List<Homework>, now: Long): List<ClassroomEvent> {
+        writableDatabase.beginTransaction()
+        try {
+            val changes = HomeworkChanges.events(homework(key), items, now)
+            items.forEach { item -> writableDatabase.insertWithOnConflict("homework", null, ContentValues().apply {
+                put("account", key); put("item_key", item.key); put("content", HomeworkCodec.encode(item))
+            }, SQLiteDatabase.CONFLICT_REPLACE).also { check(it != -1L) } }
+            changes.forEach { insertEvent(key, it) }
+            trimEvents(key)
+            writableDatabase.setTransactionSuccessful()
+            return changes
+        } finally { writableDatabase.endTransaction() }
+    }
+    @Synchronized fun clear(key: String) {
+        writableDatabase.beginTransaction()
+        try {
+            writableDatabase.delete("events", "account = ?", arrayOf(key))
+            writableDatabase.delete("homework", "account = ?", arrayOf(key))
+            writableDatabase.setTransactionSuccessful()
+        } finally { writableDatabase.endTransaction() }
+    }
 }
 
 class AppStore(context: Context) {
@@ -109,6 +152,7 @@ class AppStore(context: Context) {
         config.active()?.account?.key?.let(database::assignLegacy)
         mutable = MutableStateFlow(AppState(configuration = config,
             events = config.active()?.account?.key?.let(database::recent).orEmpty(),
+            homework = config.active()?.account?.key?.let(database::homework).orEmpty(),
             message = if (credentials.loadFailed) "本机登录信息暂时无法解密，请重新登录；已保留原始加密数据" else ""))
         if (!credentials.loadFailed && config.profiles.isNotEmpty()) {
             credentials.save(config)
@@ -141,6 +185,18 @@ class AppStore(context: Context) {
         val recent = database.add(key, event)
         update { if (it.account?.key == key) it.copy(events = recent) else it }
     }
+    @Synchronized fun homework(key: String): List<Homework> = database.homework(key)
+    @Synchronized fun applyHomework(account: Account, courseId: String, items: List<Homework>): List<ClassroomEvent> {
+        val profile = profile(account.key) ?: return emptyList()
+        if (profile.account !== account || !profile.selects(courseId)) return emptyList()
+        require(items.all { it.courseId == courseId })
+        val changes = database.saveHomework(account.key, items, System.currentTimeMillis())
+        update { if (it.account?.key == account.key) it.copy(homework = database.homework(account.key), events = database.recent(account.key)) else it }
+        return changes
+    }
+    fun homeworkStatus(key: String, block: (HomeworkSyncStatus) -> HomeworkSyncStatus) {
+        update { if (profile(key) == null) it else it.copy(homeworkSync = it.homeworkSync + (key to block(it.homeworkSync[key] ?: HomeworkSyncStatus()))) }
+    }
     fun runtime(key: String, block: (AccountRuntime) -> AccountRuntime) {
         update { it.copy(runtimes = it.runtimes + (key to block(it.runtimes[key] ?: AccountRuntime()))) }
     }
@@ -149,12 +205,12 @@ class AppStore(context: Context) {
         val previous = profile(account.key)
         val profile = previous?.copy(account = account, monitored = true) ?: AccountProfile(account)
         save(current.copy(profiles = current.profiles.filterNot { it.account.key == account.key } + profile, selected = account.key))
-        update { it.copy(events = database.recent(account.key), message = "", loading = false) }
+        update { it.copy(events = database.recent(account.key), homework = database.homework(account.key), message = "", loading = false) }
     }
     @Synchronized fun select(key: String) {
         if (profile(key) == null) return
         save(state.value.configuration.copy(selected = key))
-        update { it.copy(events = database.recent(key), message = "", loading = false) }
+        update { it.copy(events = database.recent(key), homework = database.homework(key), message = "", loading = false) }
     }
     @Synchronized fun signOut(key: String? = state.value.account?.key) {
         if (key == null) return
@@ -163,7 +219,8 @@ class AppStore(context: Context) {
         val selected = if (current.selected == key) remaining.firstOrNull()?.account?.key else current.selected
         save(current.copy(profiles = remaining, selected = selected))
         database.clear(key)
-        update { it.copy(events = selected?.let(database::recent).orEmpty(), runtimes = it.runtimes - key, message = "", loading = false) }
+        update { it.copy(events = selected?.let(database::recent).orEmpty(), homework = selected?.let(database::homework).orEmpty(),
+            homeworkSync = it.homeworkSync - key, runtimes = it.runtimes - key, message = "", loading = false) }
     }
     @Synchronized fun expire(account: Account) {
         if (profile(account.key)?.account !== account) return

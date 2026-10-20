@@ -25,7 +25,7 @@ class YuketangApi(
         .followRedirects(false).build(),
     private val endpoint: ((String) -> HttpUrl)? = null,
     private val handshakeTimeoutMillis: Long = 15_000,
-) : ClassroomGateway, AutomationGateway {
+) : ClassroomGateway, AutomationGateway, HomeworkGateway {
     private fun url(domain: String, path: String): HttpUrl {
         Domain.requireHost(domain)
         val base = endpoint?.invoke(domain) ?: "https://$domain/".toHttpUrl()
@@ -95,6 +95,34 @@ class YuketangApi(
         request(account.domain, "/v2/api/web/courses/list?identity=2", account.sessionId).build(),
     ))
 
+    override suspend fun homeworkPage(account: Account, course: Course, page: Int): HomeworkPage {
+        require(page in 0 until HomeworkSynchronizer.MAX_PAGES)
+        val path = "/v2/api/web/logs/learn/" + course.id
+        val target = url(account.domain, "/v2/api/web/logs/learn/").newBuilder().addPathSegment(course.id)
+            .addQueryParameter("actype", "-1").addQueryParameter("page", page.toString())
+            .addQueryParameter("offset", "20").addQueryParameter("sort", "-1").build()
+        return HomeworkProtocol.page(json(request(account.domain, path, account.sessionId).url(target).build()), course)
+    }
+
+    override suspend fun homeworkDetail(account: Account, homework: Homework): Homework {
+        if (homework.type == HomeworkType.QUIZ) {
+            val path = "/v2/api/web/quiz/quiz_info"
+            val target = url(account.domain, path).newBuilder().addQueryParameter("classroom_id", homework.courseId)
+                .addQueryParameter("quiz_id", homework.id).build()
+            return HomeworkProtocol.quiz(json(request(account.domain, path, account.sessionId).url(target).build()), homework)
+        }
+        val target = url(account.domain, "/mooc-api/v1/lms/learn/leaf_info/").newBuilder()
+            .addPathSegment(homework.courseId).addPathSegment(homework.leafId).addPathSegment("").build()
+        val root = json(request(account.domain, "/", account.sessionId).url(target).build())
+        val leaf = HomeworkProtocol.leaf(root, homework)
+        val exerciseId = HomeworkProtocol.data(root).obj("content_info").text("leaf_type_id")
+            .takeIf { it.isNotBlank() } ?: throw NetworkFailure("作业详情缺少练习编号")
+        if (leaf.skuId.isBlank()) throw NetworkFailure("作业详情缺少课程资源编号")
+        val detailTarget = url(account.domain, "/mooc-api/v1/lms/exercise/get_exercise_list/").newBuilder()
+            .addPathSegment(exerciseId).addPathSegment(leaf.skuId).addPathSegment("").build()
+        return HomeworkProtocol.exercise(json(request(account.domain, "/", account.sessionId).url(detailTarget).build()), leaf)
+    }
+
     override suspend fun activeLessons(account: Account): List<ActiveLesson> = Protocol.parseLessons(json(
         request(account.domain, "/api/v3/classroom/on-lesson-upcoming-exam", account.sessionId).build(),
     ))
@@ -135,10 +163,22 @@ class YuketangApi(
     }
 
     private suspend fun action(account: Account, access: LessonAccess, path: String, body: JsonObject) {
-        val result = json(lessonRequest(account, access, path).post(body.toString().toRequestBody(JSON_TYPE)).build())
-        if ((result["code"] as? JsonPrimitive)?.intOrNull != 0 || (result["success"] as? JsonPrimitive)?.booleanOrNull == false) {
-            Protocol.data(result)
-            throw NetworkFailure("雨课堂未确认操作成功")
+        val request = lessonRequest(account, access, path).post(body.toString().toRequestBody(JSON_TYPE)).build()
+        client.newCall(request).await().use { response ->
+            if (response.code == 401 || response.code == 403) throw SessionExpired()
+            val root = if (response.isSuccessful) readJson(response) else withContext(Dispatchers.IO) {
+                try { protocolJson.parseToJsonElement(response.peekBody(16_384).string()) as? JsonObject }
+                catch (_: IOException) { null }
+                catch (_: kotlinx.serialization.SerializationException) { null }
+            }
+            val code = (root?.get("code") as? JsonPrimitive)?.intOrNull
+            val failure = ActionFailure(response.code, code, LessonEntryDetail.fromMessage(root?.text("msg").orEmpty()))
+            if (root != null) {
+                try { Protocol.checkResult(root) }
+                catch (_: ApiRejected) { throw failure }
+            }
+            // HTTP errors and missing business confirmation must never count as success.
+            if (!response.isSuccessful || code != 0) throw failure
         }
     }
     override suspend fun submit(account: Account, access: LessonAccess, question: Question, answer: Answer, now: Long) =

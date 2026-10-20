@@ -10,8 +10,8 @@ android {
         applicationId = "cn.yukehelper.android.prototype"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.2.9"
+        versionCode = 16
+        versionName = "0.2.12"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -19,7 +19,7 @@ data class AiSettings(val keys: List<AiKey> = emptyList(), val active: Int = 0, 
 }
 data class Subscription(
     val enabled: Boolean = false,
-    val kinds: Set<EventKind> = setOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS),
+    val kinds: Set<EventKind> = setOf(EventKind.SIGN_IN, EventKind.QUESTION, EventKind.CALL, EventKind.DANMU, EventKind.BONUS, EventKind.HOMEWORK),
 ) { fun accepts(kind: EventKind) = enabled && kind in kinds }
 
 data class CourseSettings(
@@ -33,7 +33,7 @@ data class CourseSettings(
     val autoDanmu: Boolean = false,
     val autoBonus: Boolean = false,
     val danmuThreshold: Int = 3,
-    val notification: Subscription = Subscription(true, setOf(EventKind.QUESTION, EventKind.CALL)),
+    val notification: Subscription = Subscription(true, setOf(EventKind.QUESTION, EventKind.CALL, EventKind.HOMEWORK)),
     val voice: Subscription = Subscription(),
 ) {
     fun mode(type: Int) = when (type) { 1 -> single; 2 -> multiple; 3 -> vote; 5 -> short; else -> AnswerMode.OFF }
@@ -102,7 +102,7 @@ object ConfigurationCodec {
         return AiSettings(keys, root.int("active", 0).coerceIn(0, (keys.size - 1).coerceAtLeast(0)), root.bool("fallback", true))
     }
     fun encode(config: Configuration): String = buildJsonObject {
-        put("version", 4); put("selected", config.selected)
+        put("version", 5); put("selected", config.selected)
         put("courseSettings", course(config.courseSettings))
         put("settingsMigration", config.settingsMigration)
         put("ai", ai(config.ai)); put("aiMigration", config.aiMigration)
@@ -140,7 +140,10 @@ object ConfigurationCodec {
         else migrateSettings(profiles, selected, items)
         val sharedAi = if (root.int("version", 2) >= 4) ai(root.obj("ai")) to root.text("aiMigration")
         else migrateAi(profiles, selected, items)
-        return Configuration(profiles, selected, rules.first, rules.second, sharedAi.first, sharedAi.second)
+        val settings = if (root.int("version", 2) < 5) rules.first.copy(
+            notification = rules.first.notification.copy(kinds = rules.first.notification.kinds + EventKind.HOMEWORK),
+        ) else rules.first
+        return Configuration(profiles, selected, settings, rules.second, sharedAi.first, sharedAi.second)
     }
 
     /** Retain every distinct usable key, preferring the current account's active key and fallback setting. */
