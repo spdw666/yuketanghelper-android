@@ -1,7 +1,6 @@
 package cn.yukehelper.android
 
 import android.Manifest
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,11 +12,11 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
-import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -31,7 +30,7 @@ import kotlinx.coroutines.*
  * This screen reads it locally (camera, gallery image or pasted text) and submits it through the
  * same two-step protocol the official client uses.
  */
-class ScanActivity : Activity() {
+class ScanActivity : ComponentActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val graph get() = application as HelperApplication
     private val executor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
@@ -116,8 +115,8 @@ class ScanActivity : Activity() {
                     .build()
                     .also { it.setAnalyzer(executor, ::analyze) }
                 provider.unbindAll()
-                val group = UseCaseGroup.Builder().addUseCase(previewUseCase).addUseCase(analysis).build()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, group)
+                // ComponentActivity is a LifecycleOwner, so this binds through the public vararg API.
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, previewUseCase, analysis)
                 if (!busy && resultPanel.visibility == View.GONE) status.text = "对准课堂大屏上的签到二维码"
             } catch (_: Exception) {
                 status.text = "相机启动失败，可用相册识别或粘贴二维码内容"
