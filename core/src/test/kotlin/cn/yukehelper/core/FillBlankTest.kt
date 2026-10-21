@@ -1,5 +1,6 @@
 package cn.yukehelper.core
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import kotlin.random.Random
