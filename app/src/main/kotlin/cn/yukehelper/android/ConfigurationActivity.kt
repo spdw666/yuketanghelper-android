@@ -82,14 +82,15 @@ class ConfigurationActivity : Activity() {
         body.block(label("所有课程统一设置", 25f, bold = true), 6)
         body.block(label("保存后应用于所有账号的全部已选课程，以及以后新增并勾选的课程。课程页只负责选择监测范围。运行中的课堂会重新连接以应用规则。", 13f, Palette.muted))
         if (config.settingsMigration.isNotBlank()) body.block(label(config.settingsMigration, 13f, Palette.warning))
-        body.block(label("AI 模式会把本题课件图片交给全局配置的 AI 服务。AI 超时、密钥不可用或答案无效时，选择题随机、主观题填空白。", 13f, Palette.warning))
+        body.block(label("AI 模式会把本题课件图片交给全局配置的 AI 服务。AI 超时、密钥不可用或答案无效时，选择题随机、填空题留空、主观题填空白。", 13f, Palette.warning))
         val choices = listOf(AnswerMode.OFF, AnswerMode.AI, AnswerMode.RANDOM)
         val shorts = listOf(AnswerMode.OFF, AnswerMode.AI, AnswerMode.BLANK)
         val single = spinner("单选题", choices.map { it.label }, choices.indexOf(s.single))
         val multiple = spinner("多选题", choices.map { it.label }, choices.indexOf(s.multiple))
         val vote = spinner("投票题", choices.map { it.label }, choices.indexOf(s.vote))
+        val fill = spinner("填空题", shorts.map { it.label }, shorts.indexOf(s.fill))
         val short = spinner("主观题", shorts.map { it.label }, shorts.indexOf(s.short))
-        body.block(label("其他题型暂不自动作答。在“AI 服务与密钥（全局）”配置一次，所有账号共用。", 12f, Palette.muted))
+        body.block(label("填空按空格顺序逐项提交，AI 每行给一个空；主观题整段作答。判断题等其它题型暂不自动作答。在“AI 服务与密钥（全局）”配置一次，所有账号共用。", 12f, Palette.muted))
         val near = check("临近截止提交（提前约 10–15 秒）", s.nearDeadline)
         body.block(label("老师提前收题时可能无法提交；未提供截止时间时会尽快处理。提交前会检查是否已有答案。", 12f, Palette.muted))
         val danmu = check("跟随重复弹幕（60 秒内达到阈值）", s.autoDanmu)
@@ -102,7 +103,8 @@ class ConfigurationActivity : Activity() {
             val count = threshold.text.toString().toIntOrNull()
             if (count == null || count !in 1..100) { threshold.error = "请输入 1–100"; return@action }
             val value = CourseSettings(single = choices[single.selectedItemPosition], multiple = choices[multiple.selectedItemPosition],
-                vote = choices[vote.selectedItemPosition], short = shorts[short.selectedItemPosition], nearDeadline = near.isChecked,
+                vote = choices[vote.selectedItemPosition], fill = shorts[fill.selectedItemPosition],
+                short = shorts[short.selectedItemPosition], nearDeadline = near.isChecked,
                 autoDanmu = danmu.isChecked, autoBonus = bonus.isChecked, danmuThreshold = count,
                 notification = notification(), voice = voice())
             save({ store.saveCourseSettings(value) })

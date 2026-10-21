@@ -301,7 +301,7 @@ class MainActivity : Activity() {
                     page = 0
                 }.show()
         })
-        body.block(label("雨课助手 0.2.13\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
+        body.block(label("雨课助手 0.2.14\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
     }
 
     private fun eventCard(event: ClassroomEvent) = card().apply {

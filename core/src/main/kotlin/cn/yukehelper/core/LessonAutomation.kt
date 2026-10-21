@@ -158,7 +158,7 @@ class LessonAutomation(
     private fun schedule(q: Question, hint: Long?) {
         if (q.answered) { handled.add(q.id); return }
         if (settings().mode(q.type) == AnswerMode.OFF) {
-            if (notices.add(q.id)) event(EventKind.ANSWER, "题目 ${q.id}：${if (q.type !in listOf(1, 2, 3, 5)) "暂不支持此题型" else "此题型自动答题已关闭"}")
+            if (notices.add(q.id)) event(EventKind.ANSWER, "题目 ${q.id}：${if (q.type !in Question.supported) "暂不支持此题型" else "此题型自动答题已关闭"}")
             return
         }
         if (q.id in handled || (attempts[q.id] ?: 0) >= 3 || (failures[q.id] ?: 0) >= 3 || !claimed.add(q.id)) return
@@ -176,9 +176,10 @@ class LessonAutomation(
     }
 
     private fun fallback(q: Question): Answer {
-        if (q.type == 5) return Answer.Text(" ")
+        if (q.type == Question.FILL_BLANK) return Answer.Blanks(List(q.blanks) { "" })
+        if (q.type == Question.SHORT_ANSWER) return Answer.Text(" ")
         require(q.options.isNotEmpty() && q.maxChoices > 0)
-        val count = if (q.type == 1) 1 else random.nextInt(1, q.maxChoices + 1)
+        val count = if (q.type == Question.SINGLE) 1 else random.nextInt(1, q.maxChoices + 1)
         return Answer.Choices(q.options.shuffled(random).take(count))
     }
 
@@ -199,7 +200,7 @@ class LessonAutomation(
             else -> 45_000L
         }
         var result: Answer? = null
-        var source = if (q.type == 5) "空白" else "随机"
+        var source = if (q.type == Question.FILL_BLANK || q.type == Question.SHORT_ANSWER) "空白" else "随机"
         if (mode == AnswerMode.AI) {
             result = withTimeoutOrNull(budget) {
                 for (key in aiSettings().ordered()) {
@@ -211,6 +212,11 @@ class LessonAutomation(
                 null
             }
             if (result != null) source = "AI" else event(EventKind.ANSWER, "题目 ${q.id}：AI 无可用结果，使用${source}回退")
+        }
+        // A fill-in answer must be one value per blank; anything else is dropped rather than guessed.
+        if (q.type == Question.FILL_BLANK && result != null && result !is Answer.Blanks) {
+            event(EventKind.ANSWER, "题目 ${q.id}：AI 返回的不是填空格式，使用空白回退")
+            result = null
         }
         if (result == null) result = fallback(q)
         delay((hold - (now() - started)).coerceAtLeast(0))
@@ -238,7 +244,11 @@ class LessonAutomation(
             try {
                 val timeLeft = deadline?.minus(serverNow()) ?: 3000L
                 withTimeout(timeLeft.coerceIn(1, 3000)) { gateway.submit(account, access, submitted, result, now()) }
-                val display = when (result) { is Answer.Choices -> result.options.joinToString(" "); is Answer.Text -> result.content.trim().ifBlank { "（空白）" } }
+                val display = when (result) {
+                    is Answer.Choices -> result.options.joinToString(" ")
+                    is Answer.Blanks -> result.values.joinToString(" ｜ ").ifBlank { "（空白）" }
+                    is Answer.Text -> result.content.trim().ifBlank { "（空白）" }
+                }
                 event(EventKind.ANSWER, "题目 ${q.id} 已提交（$source）：${display.take(200)}")
                 return true
             } catch (_: TimeoutCancellationException) {

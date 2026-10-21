@@ -29,6 +29,8 @@ data class CourseSettings(
     val multiple: AnswerMode = AnswerMode.OFF,
     val vote: AnswerMode = AnswerMode.OFF,
     val short: AnswerMode = AnswerMode.OFF,
+    /** Fill-in-the-blank: AI, or deliberately blank. A random value cannot be a plausible answer. */
+    val fill: AnswerMode = AnswerMode.OFF,
     val nearDeadline: Boolean = false,
     val autoDanmu: Boolean = false,
     val autoBonus: Boolean = false,
@@ -36,7 +38,14 @@ data class CourseSettings(
     val notification: Subscription = Subscription(true, setOf(EventKind.QUESTION, EventKind.CALL, EventKind.HOMEWORK)),
     val voice: Subscription = Subscription(),
 ) {
-    fun mode(type: Int) = when (type) { 1 -> single; 2 -> multiple; 3 -> vote; 5 -> short; else -> AnswerMode.OFF }
+    fun mode(type: Int) = when (type) {
+        Question.SINGLE -> single
+        Question.MULTIPLE -> multiple
+        Question.VOTE -> vote
+        Question.FILL_BLANK -> fill
+        Question.SHORT_ANSWER -> short
+        else -> AnswerMode.OFF
+    }
 }
 data class AccountProfile(
     val account: Account,
@@ -74,18 +83,29 @@ object ConfigurationCodec {
     )
     private fun course(s: CourseSettings) = buildJsonObject {
         put("single", s.single.name); put("multiple", s.multiple.name)
-        put("vote", s.vote.name); put("short", s.short.name); put("near", s.nearDeadline)
+        put("vote", s.vote.name); put("short", s.short.name); put("fill", s.fill.name); put("near", s.nearDeadline)
         put("danmu", s.autoDanmu); put("bonus", s.autoBonus); put("threshold", s.danmuThreshold)
         put("notification", subscription(s.notification)); put("voice", subscription(s.voice))
     }
     private fun course(r: JsonObject): CourseSettings {
-        fun mode(key: String, short: Boolean = false): AnswerMode {
-            val mode = runCatching { AnswerMode.valueOf(r.text(key)) }.getOrDefault(AnswerMode.OFF)
-            return if (short && mode == AnswerMode.RANDOM || !short && mode == AnswerMode.BLANK) AnswerMode.OFF else mode
+        // Choice questions accept random answers; free-text questions accept a deliberate blank.
+        val choiceModes = setOf(AnswerMode.OFF, AnswerMode.AI, AnswerMode.RANDOM)
+        val textModes = setOf(AnswerMode.OFF, AnswerMode.AI, AnswerMode.BLANK)
+        fun mode(key: String, allowed: Set<AnswerMode>): AnswerMode {
+            val value = runCatching { AnswerMode.valueOf(r.text(key)) }.getOrDefault(AnswerMode.OFF)
+            return if (value in allowed) value else AnswerMode.OFF
         }
-        return CourseSettings(r.bool("enabled", true), mode("single"), mode("multiple"), mode("vote"), mode("short", true),
-            r.bool("near", false), r.bool("danmu", false), r.bool("bonus", false), r.int("threshold", 3).coerceIn(1, 100),
-            subscription(r.obj("notification"), CourseSettings().notification), subscription(r.obj("voice"), Subscription()))
+        return CourseSettings(
+            enabled = r.bool("enabled", true),
+            single = mode("single", choiceModes), multiple = mode("multiple", choiceModes),
+            vote = mode("vote", choiceModes), short = mode("short", textModes),
+            // Absent in configurations written before 0.2.14 -> OFF, never an implicit action.
+            fill = mode("fill", textModes),
+            nearDeadline = r.bool("near", false), autoDanmu = r.bool("danmu", false),
+            autoBonus = r.bool("bonus", false), danmuThreshold = r.int("threshold", 3).coerceIn(1, 100),
+            notification = subscription(r.obj("notification"), CourseSettings().notification),
+            voice = subscription(r.obj("voice"), Subscription()),
+        )
     }
     private fun ai(value: AiSettings) = buildJsonObject {
         put("active", value.active); put("fallback", value.fallback)

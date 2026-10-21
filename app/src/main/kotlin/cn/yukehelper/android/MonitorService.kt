@@ -86,7 +86,13 @@ class MonitorService : Service() {
                     excludedCourses = { graph.store.profile(key)?.excludedCourses.orEmpty() },
                     automationFactory = { sessionScope, user, access, emit ->
                         LessonAutomation(sessionScope, user, access, actions,
-                            if (account.demo) AiAnswerer { q, _ -> if (q.type == 5) Answer.Text("演示答案") else Answer.Choices(q.options.take(1)) } else graph.ai,
+                            if (account.demo) AiAnswerer { q, _ ->
+                                when (q.type) {
+                                    Question.FILL_BLANK -> Answer.Blanks(List(q.blanks) { "演示答案" })
+                                    Question.SHORT_ANSWER -> Answer.Text("演示答案")
+                                    else -> Answer.Choices(q.options.take(1))
+                                }
+                            } else graph.ai,
                             { graph.store.state.value.configuration.effectiveCourseSettings(key, access.lesson.classroomId) },
                             { graph.store.state.value.configuration.ai }, emit)
                     }).run(account) { update ->

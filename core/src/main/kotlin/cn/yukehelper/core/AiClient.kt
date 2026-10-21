@@ -51,7 +51,7 @@ class AiClient(
                 if (key.provider == AiProvider.DEEPSEEK) {
                     put("thinking", buildJsonObject { put("type", "disabled") })
                     put("stream", false)
-                    put("max_tokens", if (question.type == 5) 2048 else 128)
+                    put("max_tokens", if (question.type == Question.SHORT_ANSWER || question.type == Question.FILL_BLANK) 2048 else 128)
                 } else put("chat_template_kwargs", buildJsonObject { put("enable_thinking", false) })
             }
         } else {
@@ -118,13 +118,32 @@ class AiClient(
 
     companion object {
         fun prompt(q: Question): String {
-            if (q.type == 5) return "Read this short-answer question slide. Reply with ONLY a concise answer, nothing else."
-            val count = when (q.type) { 1 -> "exactly ONE"; 3 -> "up to ${q.maxChoices}"; else -> "ALL correct" }
+            if (q.type == Question.FILL_BLANK) {
+                val blanks = q.blanks
+                return "Read this fill-in-the-blank question slide. It has $blanks blank(s) in order. " +
+                    "Reply with ONLY the value for each blank, one per line, $blanks line(s) in total, " +
+                    "no numbering, no explanation. Output an empty line for a blank you cannot answer."
+            }
+            if (q.type == Question.SHORT_ANSWER) return "Read this short-answer question slide. Reply with ONLY a concise answer, nothing else."
+            val count = when (q.type) { Question.SINGLE -> "exactly ONE"; Question.VOTE -> "up to ${q.maxChoices}"; else -> "ALL correct" }
             return "Read the question and options from this slide. Choose $count option(s) from ${q.options.joinToString(", ")}. Reply with ONLY option letters separated by spaces, nothing else."
         }
         fun parse(q: Question, raw: String): Answer {
             val text = raw.trim()
-            if (q.type == 5) {
+            if (q.type == Question.FILL_BLANK) {
+                // One line per blank. Numbering is stripped only when it is clearly a list marker, so a
+                // decimal answer such as "1.5" survives intact.
+                val lines = text.lines().map { line ->
+                    line.trim()
+                        .replace(Regex("^(?:空\\s*)?\\d+\\s*[:：]\\s*"), "")
+                        .replace(Regex("^(?:空\\s*)?\\d+\\s*[.、)．]\\s+"), "")
+                        .trim().trim('"', '\'', '“', '”', '‘', '’')
+                }
+                val values = (0 until q.blanks).map { index -> lines.getOrElse(index) { "" }.take(500) }
+                require(values.any { it.isNotBlank() }) { "AI 未返回有效答案" }
+                return Answer.Blanks(values)
+            }
+            if (q.type == Question.SHORT_ANSWER) {
                 require(text.isNotBlank() && text.length <= 4000) { "AI 未返回有效答案" }
                 return Answer.Text(text)
             }
