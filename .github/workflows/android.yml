@@ -8,6 +8,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # ubuntu-latest already ships the Android SDK. setup-android@v3 is avoided because it
+      # hard-fails on the removed "tools" package.
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
 
@@ -17,8 +22,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Ensure Android platform 35 and build-tools 35.0.0
+        run: |
+          set -e
+          SDK="${ANDROID_HOME}"
+          SM="$(find "$SDK/cmdline-tools" -maxdepth 2 -name sdkmanager 2>/dev/null | head -1)"
+          need=""
+          [ -d "$SDK/platforms/android-35" ] || need="$need platforms;android-35"
+          [ -d "$SDK/build-tools/35.0.0" ] || need="$need build-tools;35.0.0"
+          echo "SDK=$SDK sdkmanager=$SM missing=[$need]"
+          if [ -n "$need" ] && [ -n "$SM" ]; then yes | "$SM" $need > /dev/null; fi
+          ls "$SDK/platforms" "$SDK/build-tools"
 
       # The checked-in wrapper points at a domestic mirror; runners use the canonical URL.
       # The SHA-256 check in gradle-wrapper.properties still applies to the same archive.
