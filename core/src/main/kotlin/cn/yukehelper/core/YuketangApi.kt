@@ -25,7 +25,7 @@ class YuketangApi(
         .followRedirects(false).build(),
     private val endpoint: ((String) -> HttpUrl)? = null,
     private val handshakeTimeoutMillis: Long = 15_000,
-) : ClassroomGateway, AutomationGateway, HomeworkGateway {
+) : ClassroomGateway, AutomationGateway, HomeworkGateway, AttendanceGateway {
     private fun url(domain: String, path: String): HttpUrl {
         Domain.requireHost(domain)
         val base = endpoint?.invoke(domain) ?: "https://$domain/".toHttpUrl()
@@ -310,8 +310,62 @@ class YuketangApi(
         awaitClose { handshake.cancel(); socket.cancel() }
     }
 
+    /**
+     * The scanned code is forwarded verbatim. Only a check-in code answers with a lesson id; a login
+     * code answers with type=app_web_login and must never be treated as attendance.
+     */
+    override suspend fun dispatchScan(account: Account, raw: String): ScanDispatch {
+        val request = request(account.domain, "/api/v3/app/scan", account.sessionId)
+            .removeHeader("xt-agent").header("x-client", "app").header("xtbz", "ykt")
+            .post(buildJsonObject { put("url", raw) }.toString().toRequestBody(JSON_TYPE)).build()
+        val root = json(request)
+        val code = (root["code"] as? JsonPrimitive)?.intOrNull
+        val data = root["data"] as? JsonObject
+        val type = data?.text("type").orEmpty()
+        val value = data?.get("value") as? JsonPrimitive
+        if (type == LOGIN_CODE_TYPE) throw AttendanceRejected(AttendanceIssue.LOGIN_CODE, code)
+        if (code != 0) throw AttendanceRejected(attendanceIssue(code), code)
+        if (value == null || value.contentOrNull.isNullOrBlank()) {
+            throw AttendanceRejected(attendanceIssue(code), code)
+        }
+        return ScanDispatch.CheckIn(value)
+    }
+
+    /** Same two-step protocol as the official client: source 21 plus joinIfNotIn. */
+    override suspend fun signIn(account: Account, lessonId: JsonPrimitive): SignInReceipt {
+        val body = buildJsonObject { put("source", 21); put("lessonId", lessonId); put("joinIfNotIn", true) }
+        val request = request(account.domain, "/api/v3/lesson/checkin", account.sessionId)
+            .post(body.toString().toRequestBody(JSON_TYPE)).build()
+        return client.newCall(request).await().use { result ->
+            if (result.code == 401 || result.code == 403) throw SessionExpired()
+            val text = withContext(Dispatchers.IO) {
+                try { (if (result.isSuccessful) result.body?.string() else result.peekBody(16_384).string()).orEmpty() }
+                catch (_: IOException) { "" }
+            }
+            val root = try { protocolJson.parseToJsonElement(text) as? JsonObject } catch (_: Exception) { null }
+            val code = (root?.get("code") as? JsonPrimitive)?.intOrNull
+            // Never treat a bare HTTP success as a completed check-in.
+            if (result.isSuccessful && code == 0) {
+                val data = root["data"] as? JsonObject
+                SignInReceipt(lessonId.content, data?.text("lessonToken").orEmpty(),
+                    data?.text("className").takeUnless { it.isNullOrBlank() } ?: data?.text("courseName").orEmpty())
+            } else throw AttendanceRejected(attendanceIssue(code), code)
+        }
+    }
+
+    private fun attendanceIssue(code: Int?): AttendanceIssue = when (code) {
+        51203 -> AttendanceIssue.EXPIRED
+        51201 -> AttendanceIssue.MALFORMED
+        50033 -> AttendanceIssue.NOT_FOUND
+        50004 -> AttendanceIssue.FINISHED
+        50025, 50029 -> AttendanceIssue.RATE_LIMIT
+        50000, 50002, 50003 -> AttendanceIssue.DENIED
+        else -> AttendanceIssue.UNKNOWN
+    }
+
     companion object {
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
+        private const val LOGIN_CODE_TYPE = "app_web_login"
         private val QR_REQUEST = buildJsonObject {
             put("op", "requestlogin"); put("role", "web"); put("version", 1.4)
             put("type", "qrcode"); put("from", "web")

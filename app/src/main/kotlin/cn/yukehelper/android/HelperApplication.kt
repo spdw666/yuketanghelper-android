@@ -14,6 +14,7 @@ class HelperApplication : Application() {
         private set
     val api = YuketangApi()
     val ai = AiClient()
+    val attendance by lazy { ScanAttendance(api) }
     val homework by lazy { HomeworkSyncManager(this, store, api) }
     override fun onCreate() { super.onCreate(); store = AppStore(this) }
 }

@@ -1,0 +1,58 @@
+name: Android CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # The checked-in wrapper points at a domestic mirror; runners use the canonical URL.
+      # The SHA-256 check in gradle-wrapper.properties still applies to the same archive.
+      - name: Point the wrapper at the canonical Gradle distribution
+        run: sed -i 's#https://repo.huaweicloud.com/gradle/#https://services.gradle.org/distributions/#' gradle/wrapper/gradle-wrapper.properties
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Core unit tests
+        run: ./gradlew :core:test --stacktrace
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Lint (report only)
+        if: always()
+        run: ./gradlew :app:lintDebug --stacktrace || true
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yukehelper-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            core/build/reports/tests/test
+            core/build/test-results/test
+            app/build/reports/lint-results-debug.html
+          if-no-files-found: warn

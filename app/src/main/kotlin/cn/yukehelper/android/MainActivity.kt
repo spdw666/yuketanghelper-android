@@ -173,6 +173,16 @@ class MainActivity : Activity() {
             }, 10)
             addView(label("每次最长 4 小时 · 监测期间显示持续通知", 11f, Palette.muted))
         })
+        body.block(card().apply {
+            val title = row()
+            title.addView(label("动态二维码签到", 19f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+            title.addView(label("签到", 12f, Palette.accent))
+            addView(title); gap(6)
+            addView(label("老师开启签到后，对准课堂大屏上几秒刷新一次的二维码，或识别同学发来的截图。识别只在本机完成，签到通过雨课堂官方接口提交。", 13f, Palette.muted))
+            gap()
+            block(action("扫码签到") { scanAttendance() }, 8)
+            addView(label("动态码过期需重新扫最新一张；免登录渠道不会计入动态二维码考勤，结果以官方雨课堂为准。", 12f, Palette.muted))
+        })
         val stats = row()
         listOf("${state.courses.size}" to "我的课程", "${state.lessons.size}" to "正在上课", if (state.lastPoll > 0) time.format(Date(state.lastPoll)).take(5) to "最近检查" else "—" to "最近检查").forEach { (value, name) ->
             stats.addView(card().apply { setPadding(dp(10), dp(15), dp(10), dp(15)); addView(label(value, 21f, Palette.accent, true)); addView(label(name, 11f, Palette.muted)) },
@@ -291,7 +301,7 @@ class MainActivity : Activity() {
                     page = 0
                 }.show()
         })
-        body.block(label("雨课助手 0.2.12\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
+        body.block(label("雨课助手 0.2.13\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
     }
 
     private fun eventCard(event: ClassroomEvent) = card().apply {
@@ -312,6 +322,11 @@ class MainActivity : Activity() {
     private fun login(mode: String) { startActivity(Intent(this, LoginActivity::class.java).putExtra("domain", domain).putExtra("mode", mode)) }
     private fun configure(mode: String, account: String? = null) {
         startActivity(Intent(this, ConfigurationActivity::class.java).putExtra("mode", mode).putExtra("account", account))
+    }
+    private fun scanAttendance() {
+        val account = graph.store.state.value.account ?: return
+        if (account.demo) { Toast.makeText(this, "演示账号不能签到，请先添加真实账号", Toast.LENGTH_LONG).show(); return }
+        startActivity(Intent(this, ScanActivity::class.java))
     }
     private fun switchAccount() {
         val profiles = graph.store.state.value.configuration.profiles

@@ -1,3 +1,36 @@
+**雨课堂动态二维码签到：协议来源与 0.2.13 实现**
+
+> 2026-10-21 更新：动态二维码签到已在 0.2.13 实现「扫码 / 相册识别 / 粘贴内容 → 雨课堂官方两步接口签到」。上半部分是本次实现的依据与边界；下半部分保留 0.2.4 时期「尚未支持」的核实原文，作为历史记录，不再代表当前版本。
+
+## 一、协议（三个独立公开实现交叉核对）
+
+| 来源 | 提供的证据 |
+| --- | --- |
+| [AneryCoft/course_helper](https://github.com/AneryCoft/course_helper) `lib/api/course.dart` | `scan(qrCodeUrl)`：`POST /api/v3/app/scan {"url": <二维码内容>}`，`code==0` 时 `data.value` 即 `lessonId`；`checkIn(lessonId)`：`POST /api/v3/lesson/checkin {"source":21,"lessonId":...,"joinIfNotIn":true}`，成功时响应头 `Set-Auth` 携带课堂 Bearer，`data.lessonToken` 可用 |
+| [pjm314159/rain-course](https://github.com/pjm314159/rain-course) `docs/SPEC.md`、`backend/src/signin/client_ext.rs` | 同一流程，并记录 **51203 = 动态二维码过期**；二维码内容按域名白名单校验（www / pro / changjiang / huanghe.yuketang.cn） |
+| [RayMorTwinkle/YuketangStudio](https://github.com/RayMorTwinkle/YuketangStudio) `docs/spec/spec-005-app逆向与扫一扫.md` | 官方 App（Flutter）实测：`POST /api/v3/app/scan`，请求头 `x-client: app`、`xtbz: ykt-app`，响应 `{code, data:{flow, type, value}}`；已确认 `type=app_web_login` 是登录码，与签到码共用同一分发入口 |
+| 本机匿名探测（2026-10-21，未使用任何账号凭据） | `/api/v3/app/scan` 在未登录时对无效内容返回 `{"code":51201,"msg":"动态二维码不合规范"}`；`fetch-dynamic-invitation`、`checkin-list`、`get-invitation` 均返回 `50000 UNAUTHENTICATED`，说明路由存在但需要登录会话 |
+
+结论：二维码内容是**一个带签名的雨课堂 URL**；签到分两步，先由 `/api/v3/app/scan` 把 URL 换成课堂编号，再由 `/api/v3/lesson/checkin` 完成考勤。第一步是识别码的归属，第二步才是考勤本身。
+
+## 二、0.2.13 的实现
+
+- `core/Attendance.kt`：`QrContent` 校验（必须 https、主机为 `*.yuketang.cn`、无 userinfo、端口仅 443、≤2048 字节）；`ScanAttendance` 执行两步提交，并保留 `lessonId` 的原始 JSON 类型（数字或字符串原样回传）。
+- `core/YuketangApi.kt`：`dispatchScan` 使用 `x-client: app` + `xtbz: ykt`（与 course_helper 一致），不与网页端的 `xt-agent: web` 混用；`signIn` 使用 `source:21` + `joinIfNotIn:true`。只有 HTTP 成功且 `code==0` 才计为签到成功。
+- `app/ScanActivity.kt`：CameraX 预览 + ZXing **本机**解码；相册图片识别（等比降采样后解码）；粘贴二维码内容。图片与二维码内容不会上传到第三方服务，只作为 JSON 字段提交给雨课堂。
+- 错误映射：51201 不合规范、50033 未找到、51203 过期、50004 课堂结束、50025/50029 频率限制、50000/50002/50003 无权限。界面只显示固定分类 + 数值代码，不回显服务端原文。
+- 幂等：同一进程内，同一账号 + 同一课堂编号只提交一次；重复扫描同一张码提示「该二维码已签到」，不追加请求。
+- 入口：「总览 → 动态二维码签到 → 扫码签到」；结果写入该账号的消息记录，并按「通用课程设置 → 本机通知」的签到类型提醒。
+
+## 三、边界（必须如实说明）
+
+1. **无法凭空生成签到码。** 动态码由服务端按当次课堂签发、约每 8 秒刷新，内容是带 `c` / `t` / `s` 的签名 URL，只出现在教师端大屏。本 App 读取现场大屏或用户提供的截图，不猜测、不伪造签名，也没有绕过取码这一步。
+2. **不能替代人到场。** 官方帮助条目 501 明确：开启动态二维码签到后，学生通过其他进班渠道均无法完成签到，教师端记为未签到。本实现只是把「用官方 App 扫」换成「用本 App 扫并自动提交」，前提仍是现场取到有效二维码。
+3. **尚未在真实课堂验证。** 单元测试覆盖请求构造、编号类型保持、错误映射与幂等；摄像头取景与真实考勤回执需要一张当场的签到码在手机上确认。首次失败时请记录界面显示的接口代码。
+4. **转发码的有效性取决于刷新周期。** 别人发来的截图只在生成后的几秒内可用，过期后必须取新码。
+
+## 四、历史核实记录（0.2.4 时期，保留原文）
+
 **雨课堂动态二维码签到：公开资料核实**
 
 > 历史范围：以下核实针对 0.2.4 及当时的公开源码。自 0.2.5 起已修正进课堂后的成功提示，动态二维码签到仍未实现。当前实现与验证见 [0.2.6 记录](VALIDATION-0.2.6.md)。
@@ -45,5 +78,3 @@
 当前代码 `MonitorEngine.kt` 在 `gateway.checkIn()` 返回后直接显示“课堂签到成功”；`YuketangApi.kt` 的返回条件是收到课堂连接凭据。该文案可能让动态签到用户误以为已经完成考勤。合理的改法是先显示“已进入课堂；考勤状态待确认”，只有取得独立、明确的考勤结果后才显示签到成功。
 
 实现动态二维码识别时，应使用现场实际获得的有效二维码，并在合法接入流程中确认服务器考勤结果。仅有二维码刷新间隔和课堂编号，无法确认动态凭据内容或算法；现有资料也不足以保证只改请求参数就能支持。下一步需要官方或校方提供的接入规范，或者在用户本人正常扫码过程中、凭据留在本机的情况下核对成功与失败的考勤返回。过期、拒绝和状态不明都不应显示成功。
-
-本次交付的是资料核实结果，尚未实现或验证动态二维码签到。

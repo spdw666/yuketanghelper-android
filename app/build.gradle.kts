@@ -10,8 +10,8 @@ android {
         applicationId = "cn.yukehelper.android.prototype"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.2.12"
+        versionCode = 17
+        versionName = "0.2.13"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -33,4 +33,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Dynamic QR attendance: camera preview plus local-only QR decoding.
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("com.google.zxing:core:3.5.3")
 }
