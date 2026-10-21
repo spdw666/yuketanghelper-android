@@ -87,8 +87,11 @@ interface AttendanceGateway {
  * cannot produce a second check-in request. A fresh process re-asks the server instead of guessing.
  */
 class ScanAttendance(private val gateway: AttendanceGateway) {
-    private val signed = LinkedHashSet<String>()
     private val lock = Any()
+    /** code content -> lesson id, so tapping the same frame twice never repeats a request. */
+    private val acceptedByCode = LinkedHashMap<String, String>()
+    /** account|lesson, so a refreshed code for an already signed lesson never posts twice. */
+    private val signedLessons = LinkedHashSet<String>()
 
     suspend fun submit(account: Account, raw: String): AttendanceOutcome {
         val text = when (val check = QrContent.check(raw)) {
@@ -97,6 +100,10 @@ class ScanAttendance(private val gateway: AttendanceGateway) {
             QrContent.Check.TooLong -> return AttendanceOutcome.Rejected(AttendanceIssue.TOO_LONG)
             QrContent.Check.NotHttps -> return AttendanceOutcome.Rejected(AttendanceIssue.NOT_HTTPS)
             QrContent.Check.NotYuketang -> return AttendanceOutcome.Rejected(AttendanceIssue.NOT_YUKETANG)
+        }
+        val codeKey = "${account.key}|$text"
+        synchronized(lock) {
+            acceptedByCode[codeKey]?.let { return AttendanceOutcome.Signed(it, "", repeated = true) }
         }
         val dispatch = try {
             gateway.dispatchScan(account, text)
@@ -109,20 +116,31 @@ class ScanAttendance(private val gateway: AttendanceGateway) {
             is ScanDispatch.CheckIn -> dispatch.lessonId
             is ScanDispatch.Other -> return AttendanceOutcome.Rejected(AttendanceIssue.LOGIN_CODE)
         }
-        val key = "${account.key}|${lessonId.content}"
+        val lessonKey = "${account.key}|${lessonId.content}"
         synchronized(lock) {
-            if (!signed.add(key)) return AttendanceOutcome.Signed(lessonId.content, "", repeated = true)
+            if (lessonKey in signedLessons) {
+                remember(codeKey, lessonId.content)
+                return AttendanceOutcome.Signed(lessonId.content, "", repeated = true)
+            }
         }
         val receipt = try {
             gateway.signIn(account, lessonId)
         } catch (error: AttendanceRejected) {
-            synchronized(lock) { signed.remove(key) }
             return AttendanceOutcome.Rejected(error.issue, error.code)
         } catch (_: NetworkFailure) {
-            synchronized(lock) { signed.remove(key) }
             return AttendanceOutcome.Rejected(AttendanceIssue.UNKNOWN)
         }
-        synchronized(lock) { while (signed.size > 200) signed.remove(signed.first()) }
+        synchronized(lock) {
+            signedLessons.add(lessonKey)
+            remember(codeKey, lessonId.content)
+        }
         return AttendanceOutcome.Signed(lessonId.content, receipt.lessonName)
+    }
+
+    /** Bounded, so a long session of re-scans cannot grow without limit. */
+    private fun remember(codeKey: String, lessonId: String) {
+        acceptedByCode[codeKey] = lessonId
+        while (acceptedByCode.size > 200) acceptedByCode.remove(acceptedByCode.keys.first())
+        while (signedLessons.size > 200) signedLessons.remove(signedLessons.first())
     }
 }

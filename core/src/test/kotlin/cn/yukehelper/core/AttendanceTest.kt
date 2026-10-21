@@ -128,6 +128,19 @@ class AttendanceTest {
         assertEquals(2, server.requestCount)
     }
 
+    @Test fun aRefreshedCodeForTheSameLessonIsNotPostedTwice() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"code":0,"data":{"type":"lesson_checkin","value":9001}}"""))
+        server.enqueue(MockResponse().setBody("""{"code":0,"data":{"lessonToken":"tk"}}"""))
+        server.enqueue(MockResponse().setBody("""{"code":0,"data":{"type":"lesson_checkin","value":9001}}"""))
+        attendance.submit(account, code)
+        val second = attendance.submit(account, code.replace("c=abc123", "c=refreshed")) as AttendanceOutcome.Signed
+        assertTrue(second.repeated)
+        assertEquals(3, server.requestCount)   // scan, checkin, scan — never a second checkin
+        assertEquals("/api/v3/app/scan", server.takeRequest().path)
+        assertEquals("/api/v3/lesson/checkin", server.takeRequest().path)
+        assertEquals("/api/v3/app/scan", server.takeRequest().path)
+    }
+
     @Test fun nonYuketangContentNeverReachesTheNetwork() = runBlocking {
         val outcome = attendance.submit(account, "https://evil.com/steal") as AttendanceOutcome.Rejected
         assertEquals(AttendanceIssue.NOT_YUKETANG, outcome.issue)

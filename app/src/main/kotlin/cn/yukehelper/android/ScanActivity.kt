@@ -17,6 +17,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -115,7 +116,8 @@ class ScanActivity : Activity() {
                     .build()
                     .also { it.setAnalyzer(executor, ::analyze) }
                 provider.unbindAll()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, previewUseCase, analysis)
+                val group = UseCaseGroup.Builder().addUseCase(previewUseCase).addUseCase(analysis).build()
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, group)
                 if (!busy && resultPanel.visibility == View.GONE) status.text = "对准课堂大屏上的签到二维码"
             } catch (_: Exception) {
                 status.text = "相机启动失败，可用相册识别或粘贴二维码内容"
