@@ -34,6 +34,12 @@ jobs:
           if [ -n "$need" ] && [ -n "$SM" ]; then yes | "$SM" $need > /dev/null; fi
           ls "$SDK/platforms" "$SDK/build-tools"
 
+      # The checked-in settings prefer domestic mirrors. They answer 502 from this network and
+      # Gradle then disables the repository for the whole build, so CI resolves through
+      # google()/mavenCentral() instead. Local builds keep the mirrors.
+      - name: Use official Maven repositories on the runner
+        run: sed -i '/maven.aliyun.com/d' settings.gradle.kts
+
       # The checked-in wrapper points at a domestic mirror; runners use the canonical URL.
       # The SHA-256 check in gradle-wrapper.properties still applies to the same archive.
       - name: Point the wrapper at the canonical Gradle distribution
