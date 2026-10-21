@@ -4,11 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ReadinessTest {
-    @Test fun aFreshInstallIsMissingEverything() {
+    @Test fun aFreshInstallIsMissingTheThreeDetectableItemsAndTheBrandConfirmation() {
         val state = StartupReadiness()
+        // An uncreated notification channel counts as enabled; only an explicit disable adds that row.
         assertEquals(
-            listOf(ReadinessRequirement.NOTIFICATIONS, ReadinessRequirement.NOTIFICATION_CHANNELS,
-                ReadinessRequirement.BATTERY_UNRESTRICTED, ReadinessRequirement.BACKGROUND_ALLOWED),
+            listOf(ReadinessRequirement.NOTIFICATIONS, ReadinessRequirement.BATTERY_UNRESTRICTED,
+                ReadinessRequirement.BACKGROUND_ALLOWED),
             state.missing(),
         )
         assertFalse(state.ready)
