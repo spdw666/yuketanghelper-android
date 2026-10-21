@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private var homeworkLimit = 30
     private var domain = Domain.all.first().host
     private var startAfterPermission = false
+    private var gateShown = false
     private var voiceTester: VoiceNotifier? = null
     private val time = SimpleDateFormat("HH:mm:ss", Locale.CHINA)
 
@@ -81,6 +82,12 @@ class MainActivity : Activity() {
         val state = graph.store.state.value
         if (state.account != null && state.courses.isEmpty() && !state.loading) refreshCourses()
         if (::body.isInitialized) render(graph.store.state.value)
+        // Mandatory once per launch: monitoring cannot survive a locked screen without these.
+        if (!gateShown && state.account != null && state.account?.demo == false && !state.monitoring &&
+            !ReadinessChecks.state(this).ready) {
+            gateShown = true
+            startActivity(Intent(this, ReadinessActivity::class.java))
+        }
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putInt("page", page); outState.putInt("messageTab", messageTab); outState.putInt("homeworkLimit", homeworkLimit)
@@ -172,6 +179,12 @@ class MainActivity : Activity() {
                 if (state.monitoring) stopMonitoring() else startMonitoring()
             }, 10)
             addView(label("每次最长 4 小时 · 监测期间显示持续通知", 11f, Palette.muted))
+        })
+        val readiness = ReadinessChecks.state(this)
+        if (state.account?.demo == false && !readiness.ready) body.block(card().apply {
+            addView(label("后台运行未就绪（${readiness.missing().size} 项）", 18f, bold = true)); gap(6)
+            addView(label(readiness.missing().joinToString("、") { it.summary } + "。未完成时锁屏或省电策略可能让监测中断。", 13f, Palette.warning)); gap()
+            block(action("去开启") { startActivity(Intent(this@MainActivity, ReadinessActivity::class.java)) }, 0)
         })
         body.block(card().apply {
             val title = row()
@@ -301,7 +314,7 @@ class MainActivity : Activity() {
                     page = 0
                 }.show()
         })
-        body.block(label("雨课助手 0.2.14\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
+        body.block(label("雨课助手 0.2.15\n个人原型 · 课堂期间按需运行", 12f, Palette.muted))
     }
 
     private fun eventCard(event: ClassroomEvent) = card().apply {
@@ -356,6 +369,17 @@ class MainActivity : Activity() {
         }
     }
     private fun startMonitoring() {
+        // Demo classrooms never leave the device, so the background gate does not apply to them.
+        val account = graph.store.state.value.account
+        if (account != null && !account.demo) {
+            val readiness = ReadinessChecks.state(this)
+            if (!readiness.ready) {
+                gateShown = true
+                Toast.makeText(this, "还有 ${readiness.missing().size} 项后台设置未完成", Toast.LENGTH_LONG).show()
+                startActivity(Intent(this, ReadinessActivity::class.java))
+                return
+            }
+        }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             startAfterPermission = true
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)

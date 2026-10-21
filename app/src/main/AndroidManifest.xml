@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The readiness gate asks for battery-optimization exemption in one tap. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -15,6 +17,7 @@
         android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="false" android:supportsRtl="true">
         <activity android:name=".BackgroundActivity" android:exported="false" android:resizeableActivity="true" />
+        <activity android:name=".ReadinessActivity" android:exported="false" android:resizeableActivity="true" />
         <activity android:name=".ScanActivity" android:exported="false" android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity android:name=".LoginActivity" android:exported="false" android:resizeableActivity="true" />

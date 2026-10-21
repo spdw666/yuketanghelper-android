@@ -70,15 +70,18 @@ class BackgroundActivity : Activity() {
         body.block(label("课堂期间手动开始监测，保持监测通知可见。避免从最近任务中划掉应用或执行一键清理；返回 App 可查看是否仍在运行。每次最多 4 小时，系统停止后需重新开启。以上系统页面和选项名称会随系统版本变化。", 13f, Palette.muted))
         body.block(label("网页登录依赖手机的 Android System WebView 或系统浏览器组件；组件不可用时可使用扫码登录。纯 HarmonyOS NEXT 不支持 Android APK。", 13f, Palette.muted))
     }
-    private fun brandAdvice(): String {
-        val brand = "${Build.MANUFACTURER} ${Build.BRAND}".lowercase(Locale.ROOT)
-        return when {
-            listOf("vivo", "iqoo").any(brand::contains) -> "vivo / iQOO：检查后台耗电管理、允许后台高耗电及自启动；如系统提供，可在最近任务中锁定本应用。"
-            listOf("xiaomi", "redmi", "poco").any(brand::contains) -> "小米 / Redmi / POCO：检查应用省电策略（无限制）、后台自启动和最近任务锁定。"
-            listOf("oppo", "realme", "oneplus").any(brand::contains) -> "OPPO / realme / 一加：检查应用电池管理中的后台活动、自启动或关联启动，并留意自动冻结。"
-            listOf("huawei", "honor").any(brand::contains) -> "华为 / 荣耀：在应用启动管理中检查手动管理、自启动、关联启动和后台活动。需系统支持 Android APK。"
-            "samsung" in brand -> "三星：检查后台使用限制，避免将本应用列入休眠或深度休眠应用；可按需要加入从不自动休眠列表。"
-            else -> "其他品牌：检查应用信息中的电池限制、后台活动、自启动及省电模式。没有对应选项时使用系统默认设置，并在锁屏后验证监测。"
-        }
+    private fun brandAdvice(): String = brandBackgroundAdvice()
+}
+
+/** Shared with the readiness gate so both screens give identical brand guidance. */
+internal fun brandBackgroundAdvice(): String {
+    val brand = "${Build.MANUFACTURER} ${Build.BRAND}".lowercase(Locale.ROOT)
+    return when {
+        listOf("vivo", "iqoo").any(brand::contains) -> "vivo / iQOO：检查后台耗电管理、允许后台高耗电及自启动；如系统提供，可在最近任务中锁定本应用。"
+        listOf("xiaomi", "redmi", "poco").any(brand::contains) -> "小米 / Redmi / POCO：检查应用省电策略（无限制）、后台自启动和最近任务锁定。"
+        listOf("oppo", "realme", "oneplus").any(brand::contains) -> "OPPO / realme / 一加：检查应用电池管理中的后台活动、自启动或关联启动，并留意自动冻结。"
+        listOf("huawei", "honor").any(brand::contains) -> "华为 / 荣耀：在应用启动管理中检查手动管理、自启动、关联启动和后台活动。需系统支持 Android APK。"
+        "samsung" in brand -> "三星：检查后台使用限制，避免将本应用列入休眠或深度休眠应用；可按需要加入从不自动休眠列表。"
+        else -> "其他品牌：检查应用信息中的电池限制、后台活动、自启动及省电模式。没有对应选项时使用系统默认设置，并在锁屏后验证监测。"
     }
 }
